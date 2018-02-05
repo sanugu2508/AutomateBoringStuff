@@ -1,0 +1,14 @@
+import sys
+import pyperclip
+import subprocess
+i = 1
+delim = "s0"
+while i > 0:
+    ip = raw_input("Enter Device Name:")
+    if (ip == 'quit' or len(ip) ==0):
+        break;
+    output = subprocess.Popen(["ping.exe", str(ip), "-n", "5"], 
+                          stdout=subprocess.PIPE).communicate()[0]
+    pyperclip.copy(output)
+    pyperclip.paste()
+    i = i+1
