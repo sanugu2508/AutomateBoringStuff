@@ -1,0 +1,116 @@
+import pandas as pd
+import numpy as np
+import sys
+import datetime
+
+lines = [line.strip("\n") for line in open("Alerts-from-email1.txt")]
+delim1 = "sda"
+date1 = ""
+s = []
+for line in lines:
+    date = date1
+    i = line.find(delim1)
+    #print i
+    if i>0:
+        date1 = line[:i]
+        date = date1
+        line1 = line.replace('sda',"")
+        s.append(line1)
+    elif i<0:
+        line1 = date+line
+        s.append(line1)
+    else:
+        pass
+lines = [line.strip("\r") for line in s]
+delim1 = ".com "
+failed_master = "Failed to locate master name server for"
+not_authoritative = "is NOT authoritative for"
+dhcp = "DHCP failed on "
+failover = "FAILOVER"
+date1 = ""
+date_list = [["Date"],["Host"],["Zone"],["Issue"]]
+#slist = [["Date","Host","Zone","Issue"]]
+slist = [["","","",""]]
+for line in lines:
+    jlist = ["","","",""]
+    #jlist = ["Date", "Host", "Dummy", "Issue"]
+    is_failed_master = line.find(failed_master)
+    is_not_authoritative = line.find(not_authoritative)
+    is_dhcp = line.find(dhcp)
+    is_failover = line.find(failover)
+    i = line.find(delim1)
+    j = line.find(" ", i)
+    k = line.find(" ", 0)
+    date = line[:k]
+    host1 = line.rfind(" ",0,j)
+    host = line[host1+1:j]
+    if is_failed_master > 0:
+        name = line.rfind(" ",0)
+        jlist[0] = date
+        jlist[1] = host
+        jlist[2] = "dummy"
+        jlist[3] = "Failed to locate Master"
+        #print date,",",line[name:],",","dummy",",","master"
+    elif is_not_authoritative > 0:
+        name = line.rfind(" ",0)
+        jlist[0] = date
+        jlist[1] = host
+        jlist[2] = line[name:]
+        jlist[3] = "non-auth"
+        #print date,",",host,",",line[name:],",","non-auth"		
+    elif is_dhcp >0:
+        sep = " - "
+        j = line.rfind(sep)
+        host1 = line.rfind(" ",0,j)
+        network = line[host1:j]
+        k = line.find(" ",is_dhcp+15)
+        host = line[is_dhcp+15:k]
+        jlist[0] = date
+        jlist[1] = host
+        jlist[2] = network
+        jlist[3] = "DHCP failed"
+        #print date,",",host,",",network,",","dummy",",","DNS"
+    elif failover >0:
+        jlist[0] = date
+        jlist[1] = host
+        jlist[2] = "dummy"
+        jlist[3] = "Failover Interrupted"
+        #print date,",",host,",","dummy",",","Failover"
+    else:
+        jlist[0] = date
+        jlist[1] = host
+        jlist[2] = "dummy"
+        jlist[3] = line
+        #print date,",",host,",","dummy",",",line
+    slist.append(jlist)
+#print slist
+
+#text_file = open("data1.txt", "w")
+#for x in range(0, len(slist)):
+#    line = slist[x][0] + "," + slist[x][1] + "," + slist[x][2] + "," + slist[x][3]
+#    text_file.write(line + "\n")
+def time_convert(x):
+    d = datetime.datetime.strptime(x, "%m/%d/%Y")
+    d1 = datetime.date.strftime(d, "%d-%b")
+    #d2 = datetime.date.strftime(d, "%B")
+    return d1
+def month_convert(x):
+    d = datetime.datetime.strptime(x, "%m/%d/%Y")
+    d1 = datetime.date.strftime(d, "%B")
+    return d1
+df = pd.DataFrame.from_records(slist,columns= ["Date", "Host", "Zone", "Issue"])
+df1 = df
+df1.drop(df1.index[:1], inplace=True)
+df1['Month'] = df1['Date'].apply(lambda x: month_convert(x))
+df1['Date'] = df1['Date'].apply(lambda x: time_convert(x))
+#pd.options.display.max_rows = 4000
+df1
+df2 = pd.DataFrame(df1.groupby(['Host', 'Issue'])['Month'].apply(list).apply(np.unique)).reset_index()
+#df2
+#df2.to_csv('HO-DC-by-Month.csv')
+df3 = pd.DataFrame(df2)
+df4 = pd.DataFrame(df1.groupby(['Host', 'Issue'])['Date'].apply(list).apply(np.unique)).reset_index()
+df5 = pd.DataFrame(df4)
+#df5
+result = pd.merge(df3, df5, on='Host')
+result.to_csv('IPAM-Report-month-dates.csv')
