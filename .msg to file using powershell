@@ -1,0 +1,8 @@
+Get-ChildItem "Your Path Here" -Filter *.msg |
+    ForEach-Object {
+        $outlook = New-Object -comobject outlook.application
+        $msg = $outlook.Session.OpenSharedItem($_.FullName)
+        $msg | Select-Object -ExpandProperty Body -outvariable msgbody 
+        $msg | Select-Object -ExpandProperty ReceivedTime -outvariable msgtime
+        "$msgtime sda $msgbody" | Out-File -FilePath C:\Alerts2.txt -Append
+    }
