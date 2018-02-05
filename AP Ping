@@ -1,0 +1,24 @@
+import subprocess
+import sys
+import pandas as pd
+from multiprocessing.dummy import Pool as ThreadPool
+pool = ThreadPool(50)
+
+def ping_ip(ip):
+    output = subprocess.Popen(["ping.exe", str(ip), "-n", "1"], 
+                          stdout=subprocess.PIPE).communicate()[0]
+    #print output
+    if "TTL expired in transit" in output:
+        return "Site Down"
+    elif "Request timed out" in output:
+        return "Down"
+    elif "bytes=" in output:
+        return "Up"
+    elif "could not find host" in output:
+        return "DNS Error"
+    else:
+        return "Unknown"
+df = pd.read_excel('AP.xlsx', sheetname=0)
+df['status'] = df['CI']
+df['status'] = pool.map(ping_ip,df['status'])
+df
