@@ -1,0 +1,28 @@
+#!/usr/bin/python
+import sys,pexpect,time
+routeServers = ['192.168.0.200', '192.168.0.201', '192.168.0.202']
+user = 'cisco'
+passwd = 'cisco'
+for router in routeServers:
+    child = pexpect.spawn ('telnet', [router.strip()]) #option needs to be a list
+    child.expect ('Username:')
+    child.sendline(user)
+    child.expect('Password:')
+    child.sendline(passwd)
+    child.expect('>')
+    child.sendline('enable')
+    child.expect('Password:')
+    child.sendline(passwd)
+    child.expect('#')
+    child.sendline('terminal len 0')
+    child.expect('#')
+    child.sendline('sh run')
+    file_name = router + '_sh-run.txt'
+    fout = file(file_name, 'wb')
+    child.logfile = fout
+    child.expect('#')
+    child.sendline('sh ver')
+    file_name = router + '_sh-ver.txt'
+    fout = file(file_name, 'wb')
+    child.logfile = fout
+    child.expect('#')
