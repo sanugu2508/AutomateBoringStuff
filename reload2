@@ -1,0 +1,306 @@
+import sys
+import pexpect
+from bnanode import bnanode
+import argparse
+import pprint
+import os
+from collections import defaultdict
+from pysnmp.entity.rfc3413.oneliner import cmdgen
+from pysnmp.proto import rfc1902
+from pysnmp.hlapi import OctetString
+import time
+import concurrent.futures
+sys.path.insert(0,"/var/www/html/xxxxx2/RETROFIT_TOOLKIT/")
+import bna_rest
+import re
+from netmiko import ConnectHandler
+
+pp = pprint.PrettyPrinter(indent = 4)
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+        "-f",
+        "--file",
+        help = "Target List"
+)
+
+parser.add_argument(
+        "-d",
+        "--device",
+        help = "fqdn for device"
+)
+
+args = parser.parse_args()
+
+IOS = '1.3.6.1.2.1.47.1.1.1.1.10'
+STACK_SWITCH_NUMBER = '1.3.6.1.4.1.9.9.500.1.2.1.1.1'
+STACK_SWITCH_ROLE       = '1.3.6.1.4.1.9.9.500.1.2.1.1.3'
+STACK_SWITCH_PRIORITY   = '1.3.6.1.4.1.9.9.500.1.2.1.1.4'
+passw = 'N3tmGt5'
+
+
+def ping( hostname ):
+        hostname = hostname.strip()
+        response = os.system("ping -c 1 -w2 " + hostname + " > /dev/null 2>&1")
+        if response == 0:
+                return True
+        else:
+                return None
+def get_stack_data( device, stack_data ):
+        cmdGen = cmdgen.AsynCommandGenerator()
+
+        cmdGen.bulkCmd(
+                cmdgen.CommunityData(passw),
+                cmdgen.UdpTransportTarget((device, 161), timeout=8.0, retries=2),
+                0, 20,
+                (STACK_SWITCH_NUMBER, STACK_SWITCH_ROLE, STACK_SWITCH_PRIORITY),
+                (callbulk, ('stack', device, stack_data)),
+        )
+        cmdGen.bulkCmd(
+                cmdgen.CommunityData(passw),
+                cmdgen.UdpTransportTarget((device, 161), timeout=8.0, retries=2),
+                0, 20,
+                (IOS,),
+                (callbulk, ('ios', device, stack_data)),
+        )
+
+        cmdGen.snmpEngine.transportDispatcher.runDispatcher()
+
+# def callcmd(sRequest, eIndication, eStatus, eIndex, varBinds, info):
+#       if not eIndication:
+#               key, hostname, stack_data = info
+#               if key == 'ios':
+#                       pp.pprint( varBinds )
+#                       # m = re.search(' Version(.*),',varBinds[0][1])
+#                       # pp.pprint(m.group(0))
+#                       # stack_data[hostname][key] = str(varBinds[0][1])
+
+def callbulk(sRequest, eIndication, eStatus, eIndex, varBinds, info):
+        # data_stack_role_dict = {
+        #       '1': 'master',
+        #       '2': 'member',
+        #       '3': 'notMember',
+        #       '4': 'standby'
+        # }
+        data_stack_role_dict = {
+                '1': 'good',
+                '2': 'good',
+                '3': 'bad',
+                '4': 'good'
+        }
+        key, hostname, stack_data = info
+        for row in varBinds:
+                if key == 'stack':
+                        if str(row[0][0]).startswith((STACK_SWITCH_NUMBER)):
+                                _, switch_num, _, role, _, priority = map(str, (item for s in row for item in s))
+                                stack_data[hostname].setdefault(key, []).append((switch_num, data_stack_role_dict[role], priority))
+                        else:
+                                return False
+                if key == 'ios':
+                        if str(row[0][0]).startswith((IOS)):
+                                _, version = map(str, (item for s in row for item in s))
+                                if version:
+                                        #pp.pprint( version )
+                                        stack_data[hostname].setdefault(key, []).append(version)
+                                        return False
+                        else:
+                                return False
+        return True
+def compare_stack( pre, post ):
+        # print('PRE')
+        # pp.pprint( pre )
+        # print('POST')
+        # pp.pprint( post )
+        if pre == post:
+                return True
+        else:
+                return False
+# def update_license( hostname ):
+#       ssh = '/usr/bin/ssh -p 4000 -o "StrictHostKeyChecking=no"'
+#       with bnanode(user='svcbnashow', pw='t8miPAtaC') as b:
+#         d = list(b.get_devices(dev))
+#         if len(d) > 0:
+#             c = pexpect.spawnu(ssh + ' {}.xxxxx.com'.format(d[0].server))
+#             c.expect('ssword:')
+#             c.sendline('Monday2')
+#             c.expect(r'works\$ ')
+#             c.sendline('connect {}'.format(d[0].name))
+            
+def update_license( hostname ):
+        device = {
+                                'device_type': 'cisco_xe',
+                                'ip': hostname,
+                                'username': 'wcs',
+                                'password': '69Y56sdf2279?',
+                                'secret': 'MaN2h3St7r'
+                                # 'secret': 'aNt1c4amb35'
+                        }
+
+        net_connect = ConnectHandler(**device)
+        # go into enable mode
+        net_connect.enable()
+        # get the license level
+        output = net_connect.send_command("show license right-to-use", delay_factor=2)
+        if "ipservices" not in output:
+                print(hostname + ': updating license')
+                output = net_connect.send_command("license right-to-use activate ipservices all acceptEULA", delay_factor = 2)
+def do_stuff( device ):
+        with open('/u/users/xxxxx2/SCRIPTS/IOS_UPGRADES/license_list') as f:
+                license_list = f.readlines()
+        license_list = [x.strip() for x in license_list] 
+
+        print(device + ': Starting')
+        data = {'name': device, 
+                        'pre_pingable': None,
+                        'post_pingable': None, 
+                        'stack_val': None, 
+                        'bna_job': None, 
+                        'bna_config': None
+                        }
+        pre_reload_sd = defaultdict(dict)
+        # is the device in bna?
+        config = bna_rest.get_config(device, 'us')
+        if config:
+                # the device is in BNA
+                data['bna_config'] = True
+                # is the switch up
+                if ping( device ):
+                        data['pre_pingable'] = True
+                        # get stack data
+                        get_stack_data( device, pre_reload_sd )
+
+                        if not pre_reload_sd:
+                                print( device + ': Unable to get Stack Data')
+                                return data
+                        # if the running IOS is what we are upgrading to, stop
+                        if pre_reload_sd[device]['ios'][0] == '03.06.06E':
+                                print( device + ': Already running ' + pre_reload_sd[device]['ios'][0] )
+                                return data
+                        # reload
+                        # check if the device needs to have the license applied
+
+                        update_license(device)
+                        print( device + ': Reloading' )
+                        job_status = bna_rest.reload( device, 'us', 'reloader_2')
+                        # job_status = 200
+                        if job_status == 200:
+                                data['bna_job'] = True
+                                #print( device + ': Reload Job Created Successfully')
+                                # wait for 3 minutes seconds for BNA to spool the job, do device discovery and everything
+                                #pp.pprint( 'sleeping' )
+                                time.sleep(300)
+                                #pp.pprint( 'done sleeping' )
+                                # start pinging the device
+                                # we want to make sure we wait 20 minutes, which is 1200 seconds, else we are going to time out
+                                interval = 1
+                                #pp.pprint( data['stack_val'] )
+                                while interval < 1200 or data['stack_val']:
+                                        #pp.pprint( interval )
+                                        # ping to see if we are up
+                                        if ping(device):
+                                                data['post_pingable'] = True
+                                                # if its up, go get snmp data
+                                                # it takes time for the stack to come up
+                                                # we are going to wait 15 minutes for the stack to come, we will check it every minute
+                                                stack_timer = 900
+                                                stack_val = False
+                                                # if the timer hasnt expired or the stack validation is continuing to fail
+                                                #pp.pprint( 'PRE' )
+                                                #pp.pprint( pre_reload_sd[device]['stack'] )
+                                                while stack_timer != 0 or not stack_val:
+                                                        post_reload_sd = defaultdict(dict)
+                                                        #pp.pprint( stack_val )
+                                                        # go get the stack status
+                                                        get_stack_data(device, post_reload_sd)
+                                                        # compare it
+                                                        if 'stack' in post_reload_sd[device]:
+                                                                stack_state = compare_stack( pre_reload_sd[device]['stack'], post_reload_
+sd[device]['stack'] )
+
+                                                                #pp.pprint( 'POST' )
+                                                                #pp.pprint( post_reload_sd[device]['stack'] )
+                                                                # stack matches
+                                                                if stack_state == True:
+                                                                        data['stack_val'] = True
+                                                                        print(device + ': Reload Successful')
+                                                                        stack_val = True
+                                                                        return data
+                                                                # stack doesnt match
+                                                                else:
+                                                                        data['stack_val'] = False
+                                                                        stack_val == False
+                                                                        # check our timeout
+                                                                        if stack_timer == 0:
+                                                                                print(device + ': Stack is Bad')
+                                                                                return data
+                                                                        else:
+                                                                                stack_timer = stack_timer - 1
+                                                                                #pp.pprint( stack_timer )
+                                                                                time.sleep(1)
+                                                        else:
+                                                                stack_timer = stack_timer - 1
+                                                                #pp.pprint( "stack not ready" )
+                                                                time.sleep(1)
+                                                                #return data
+                                        #sleep for 1 second
+                                        time.sleep(1)
+                                        interval = interval + 1
+                                if interval == 1200:
+                                        data['post_pingable'] = False
+                                        print(device + ': Device Not Pingable after 20 minutes')
+                        else:
+                                data['bna_job'] = False
+                                print( device + ': Reload Job Failed to Create: ' )
+                else:
+                        data['pre_pingable'] = False
+                        print( device + ': Not Pingable: ' )
+        else:
+                data['bna_config'] = False
+                print( device + ': Device Not Found in BNA: ')
+        return data 
+        # if it is
+
+                # if it pings or a timer expires
+                        # print status
+        # else 
+        # print not in bna
+
+if args.device:
+        data = do_stuff( args.device )
+        pp.pprint( data )
+if args.file:
+        devices = list()
+        target_list = args.file
+        f = open( target_list, 'r')
+        for line in f:
+                devices.append(line.rstrip())
+        with concurrent.futures.ProcessPoolExecutor(max_workers = 200) as executor:
+                my_future = [executor.submit(do_stuff, device) for device in devices]
+                for future in concurrent.futures.as_completed(my_future):
+                        device_status = my_future
+                        # pp.pprint( device_status )
+                        try:
+                                data = future.result()
+                        except Exception as exc:
+                                print('%r generated an exception: %s' % (device_status, exc))
+                        else:
+                                print( data['name'] + ': Done')
+
+
+        # print( 'Pre-Reload Failures: ')
+        # for x in failed:
+        #       if x['pre_pingable'] == False or x['bna_config'] == False or x['bna_job'] == False:
+        #               # why did it fail
+        #               print( '\t' + x['name'] + ': Device Pre-check Failed')
+        # print( 'Post-Reload Failures: ')
+        # for x in failed:
+        #       if x['post_pingable'] == False:
+        #               print( '\t' + x['name'] + ': Device Not Pingable')
+        #       if x['stack_val'] == False:
+        #               print('\t' + x['name'] + ': Stack Error After Reload')
+        #                       #combine the success and fail list so then we have everything that was done
+        # print( 'Success: ')
+        # for x in success:
+        #       print('\t' + x['name'] + ': Success')
+
